@@ -8,9 +8,23 @@ import datetime
 import time
 import pytz
 import copy
+import nmap
 
 myteam = 'Blue Jays'
 team_colors=[[0.0,0.0,1.0],[1.0,1.0,1.0]] # rgb format, favorite first
+
+### nmap stuff starts here ###
+def find_gateway():
+    nm = nmap.PortScanner()
+    nm.scan(hosts='192.168.0.*',arguments='-sn')
+    for ip in nm.all_hosts():
+        hostnames = nm[ip]['hostnames']
+        if(len(hostnames)>0):
+            name = hostnames[0]['name']
+            if('GW-' in name):
+                break
+    return ip
+
 
 ### Pytradfri stuff starts here ###
 from pytradfri import Gateway
@@ -23,21 +37,21 @@ import argparse
 import threading
 import time
 
-defaultip='192.168.0.11'
+ip=find_gateway()
+
+print("Gateway found at %s"%(ip))
 
 CONFIG_FILE = 'tradfri_standalone_psk.conf'
 
 
 parser = argparse.ArgumentParser()
-parser.add_argument('host', metavar='IP', type=str,
-                    help='IP Address of your Tradfri gateway',
-                    default=defaultip, nargs='?')
 parser.add_argument('-K', '--key', dest='key', required=False,
                     help='Security code found on your Tradfri gateway')
 args = parser.parse_args()
 
+conf = load_json(CONFIG_FILE)
 
-if args.host not in load_json(CONFIG_FILE) and args.key is None:
+if ip not in conf and args.key is None:
     print("Please provide the 'Security Code' on the back of your "
           "Tradfri gateway:", end=" ")
     key = input().strip()
@@ -47,37 +61,22 @@ if args.host not in load_json(CONFIG_FILE) and args.key is None:
         args.key = key
 
 
-def observe(api, device):
-    def callback(updated_device):
-        light = updated_device.light_control.lights[0]
-        #print("Received message for: %s" % light)
-
-    def err_callback(err):
-        print(err)
-
-    def worker():
-        api(device.observe(callback, err_callback, duration=120))
-
-    threading.Thread(target=worker, daemon=True).start()
-    print('Sleeping to start observation task')
-    time.sleep(1)
-
-
-conf = load_json(CONFIG_FILE)
+#for ip in conf:
+#    print(conf[ip]['key'])
 
 try:
-    identity = conf[args.host].get('identity')
-    psk = conf[args.host].get('key')
-    api_factory = APIFactory(host=args.host, psk_id=identity, psk=psk)
+    identity = conf[ip].get('identity')
+    psk = conf[ip].get('key')
+    api_factory = APIFactory(host=ip, psk_id=identity, psk=psk)
 except KeyError:
     identity = uuid.uuid4().hex
-    api_factory = APIFactory(host=args.host, psk_id=identity)
+    api_factory = APIFactory(host=ip, psk_id=identity)
 
     try:
         psk = api_factory.generate_psk(args.key)
         print('Generated PSK: ', psk)
 
-        conf[args.host] = {'identity': identity,
+        conf[ip] = {'identity': identity,
                                'key': psk}
         save_json(CONFIG_FILE, conf)
     except AttributeError:
@@ -96,27 +95,28 @@ devices = api(devices_commands)
 lights = [dev for dev in devices if dev.has_light_control]
 
 if lights:
-    light = lights[0]
+    for l in lights:
+        if l.light_control.can_set_color:
+            light = l
+            print("Color light found!")
+            break
 else:
     print("No lights found!")
     light = None
     quit()
 
-observe(api, light)
-
-print("State: {}".format(light.light_control.lights[0].state))
-print("Dimmer: {}".format(light.light_control.lights[0].dimmer))
-print("Name: {}".format(light.name))
-print("Color: {}".format(light.light_control.can_set_color))
+#print("State: {}".format(light.light_control.lights[0].state))
+#print("Dimmer: {}".format(light.light_control.lights[0].dimmer))
+#print("Name: {}".format(light.name))
+#print("Color: {}".format(light.light_control.can_set_color))
 
 
 from colormath.color_conversions import convert_color
-from colormath.color_objects import sRGBColor, XYZColor, xyYColor
+from colormath.color_objects import sRGBColor, xyYColor
 
 def xyY_from_rgb(r,g,b):
     xyY = convert_color(sRGBColor(r,g,b),xyYColor)
     return xyY.xyy_x, xyY.xyy_y, xyY.xyy_Y
-
 
 def set_color(api,light,r,g,b):
     x,y,Y = xyY_from_rgb(r,g,b)
@@ -204,20 +204,61 @@ def color_cycle(api,light,colors = ((0.0,0.0,1.0),(1.0,1.0,1.0))):
     off_command = light.light_control.set_state(False)
     api(off_command)
 
+def color_extrapolate(api,light,colors):
+    numcycles = 10
+    stepcycles = 5
+    
+    shutoff(api,light)
+    time.sleep(1)
+
+    r,g,b = colors[-1]
+    set_color(api,light,r,g,b)
+    turnon(api,light)
+    time.sleep(1)
+
+    for c in range(numcycles):
+        for i in range(len(colors)):
+            colorslope = [0.0,0.0,0.0]
+            color = [0.0,0.0,0.0]
+            for j in range(3):
+                colorslope[j] = (colors[i][j]-colors[i-1][j])/stepcycles
+            for step in range(stepcycles):
+                for j in range(3):
+                    color[j] = colors[i-1][j]+colorslope[j]*step
+                r,g,b = color
+                set_color(api,light,r,g,b)
+                time.sleep(0.05)
+            r,g,b = colors[i]
+            set_color(api,light,r,g,b)
+
+    time.sleep(1)
+    shutoff(api,light)
+    time.sleep(1)
+
+
+def shutoff(api,light):
+    off_command = light.light_control.set_state(False)
+    api(off_command)
+    
+
+def turnon(api,light):
+    on_command = light.light_control.set_state(True)
+    api(on_command)
+
+    
+    
 def color_beat(api,light,colors):
     numcycles = 2
     timecycle = 0.5
 
     beats = [1.0,0.5,0.5,0.5,0.5,1.0,1.0,0.5,0.5,0.5,0.5]
     
-    off_command = light.light_control.set_state(False)
-    api(off_command)
+    shutoff(api,light)
     time.sleep(timecycle*0.1)
 
     r,g,b = [1.0,0.0,0.0]
     set_color(api,light,r,g,b)
-    on_command = light.light_control.set_state(True)
-    api(on_command)
+    turnon(api,light)
     time.sleep(4*timecycle)
 
     i = 0
@@ -234,11 +275,9 @@ def color_beat(api,light,colors):
     set_color(api,light,r,g,b)
     time.sleep(4*timecycle)
 
-    off_command = light.light_control.set_state(False)
-    api(off_command)
+    shutoff(api,light)
     
-off_command = light.light_control.set_state(False)
-api(off_command)
+shutoff(api,light)
 ### Pytradfri stuff ends here ###
 
 
@@ -383,7 +422,7 @@ while(True):
     if(not old_things.game_on and todays_things.game_on):
         print("The game has started.")
         color_cycle(api,light,[team_colors[0]])
-        color_beat(api,light,team_colors)
+        color_extrapolate(api,light,team_colors)
     if(not old_things.game_over and todays_things.game_over):
         print("The game has ended.")
         if(todays_things.game_won):
@@ -405,7 +444,8 @@ while(True):
         if(todays_things.run):
             print("Score!")
             rainbow(api,light)
-
+            color_extrapolate(api,light)
+            
     if(not todays_things.game_today):
         print("No game today.")
         sleep_until_tomorrow()
