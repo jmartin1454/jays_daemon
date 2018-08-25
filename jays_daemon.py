@@ -123,6 +123,7 @@ def set_color(api,light,r,g,b):
     intx = int(x * 65535)
     inty = int(y * 65535)
     xy_command = light.light_control.set_xy_color(intx,inty)
+    time.sleep(0.05)
     api(xy_command)
 
 
@@ -444,7 +445,7 @@ while(True):
         if(todays_things.run):
             print("Score!")
             rainbow(api,light)
-            color_extrapolate(api,light)
+            color_extrapolate(api,light,team_colors)
             
     if(not todays_things.game_today):
         print("No game today.")
