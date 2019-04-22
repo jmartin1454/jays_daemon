@@ -1,7 +1,33 @@
 #!/usr/bin/env python3
 
-# Uses the mlbgame python module (pip install mlbgame) to get the most
-# recent play of today's Blue Jays game.
+# Uses the mlbgame python module to get the most recent play of
+# today's Blue Jays game.
+
+# Update Sun Apr 21 16:30:11 CDT 2019
+
+# The pip version of mlbgame doesn't work any more so I had to install
+# the git version.  What I had to do:
+
+# Clean out the old mlbgame
+
+# sudo -H python2.7 -m pip uninstall mlbgame
+# sudo -H python3.5 -m pip uninstall mlbgame
+# sudo -H python2.7 -m pip uninstall lxml
+# sudo -H python3.5 -m pip uninstall lxml
+
+# Make sure this worked by trying "import mlbgame" in python3.  If
+# this command does not fail at this point, it is a problem.  You
+# still have an old version hiding somewhere.  Find it and remove it.
+
+# Install the new mlbgame
+
+# git clone https://github.com/panzarino/mlbgame
+# cd mlbgame
+# sudo python3 setup.py install
+# sudo pip3 install lxml
+
+# Now run the tests on the mlbgame website.  If they succeed, you are
+# probably ready to go!
 
 import mlbgame
 import datetime
